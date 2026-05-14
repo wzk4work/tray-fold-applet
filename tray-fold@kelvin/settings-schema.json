@@ -1,0 +1,21 @@
+{
+    "section-general": {
+        "type": "section",
+        "description": "General"
+    },
+    "show-empty": {
+        "type": "switch",
+        "default": true,
+        "description": "Show the fold button when no hidden tray icons are active"
+    },
+    "show-count": {
+        "type": "switch",
+        "default": true,
+        "description": "Show hidden icon count in the tooltip"
+    },
+    "hidden-roles-json": {
+        "type": "generic",
+        "default": "[]",
+        "description": "Hidden tray roles"
+    }
+}

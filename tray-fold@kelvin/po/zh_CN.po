@@ -1,0 +1,61 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: tray-fold@kelvin\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-05-09 00:00+0800\n"
+"PO-Revision-Date: 2026-05-09 00:00+0800\n"
+"Last-Translator: Kelvin\n"
+"Language-Team: Chinese (Simplified)\n"
+"Language: zh_CN\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+
+#. tray-fold@kelvin->metadata.json->name
+msgid "Tray Fold"
+msgstr "托盘折叠"
+
+#. tray-fold@kelvin->metadata.json->description
+msgid "Fold selected tray icons into a popup menu"
+msgstr "将选定的托盘图标折叠到弹出菜单中"
+
+#: applet.js
+msgid "No hidden tray icons"
+msgstr "没有隐藏的托盘图标"
+
+#: applet.js
+msgid "Folded tray icons"
+msgstr "已折叠的托盘图标"
+
+#: applet.js
+msgid "Reload tray icons"
+msgstr "重新加载托盘图标"
+
+#: applet.js
+msgid "Saved"
+msgstr "已保存"
+
+#: applet.js
+msgid "No tray icons detected yet"
+msgstr "尚未检测到托盘图标"
+
+#: applet.js
+msgid " (inactive)"
+msgstr "（未激活）"
+
+#. tray-fold@kelvin->settings-schema.json->section-general->description
+msgid "General"
+msgstr "常规"
+
+#. tray-fold@kelvin->settings-schema.json->show-empty->description
+msgid "Show the fold button when no hidden tray icons are active"
+msgstr "没有已隐藏托盘图标时仍显示折叠按钮"
+
+#. tray-fold@kelvin->settings-schema.json->show-count->description
+msgid "Show hidden icon count in the tooltip"
+msgstr "在工具提示中显示隐藏图标数量"
+
+#. tray-fold@kelvin->settings-schema.json->hidden-roles-json->description
+msgid "Hidden tray roles"
+msgstr "隐藏的托盘角色"
