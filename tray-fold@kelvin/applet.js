@@ -58,6 +58,80 @@ function normalizeRole(role) {
     return String(role).trim().toLowerCase();
 }
 
+function isTemporaryDbusRole(role) {
+    return /^:\d+(?:\.\d+)+$/.test(normalizeRole(role));
+}
+
+function PopupIconTooltip(item, applet, initTitle) {
+    this._init(item, applet, initTitle);
+}
+
+PopupIconTooltip.prototype = {
+    __proto__: Tooltips.Tooltip.prototype,
+
+    _init: function(item, applet, initTitle) {
+        Tooltips.Tooltip.prototype._init.call(this, item, initTitle);
+        this.applet = applet;
+    },
+
+    show: function() {
+        if (this._tooltip.get_text() === "" || global.menuStack.length > 0 || !this.mousePosition) {
+            return;
+        }
+
+        const op = this._tooltip.get_opacity();
+        this._tooltip.set_opacity(0);
+        this._tooltip.show();
+
+        const monitor = Main.layoutManager.findMonitorForActor(this.item);
+        const [, , tooltipWidth, tooltipHeight] = this._tooltip.get_preferred_size();
+        const itemBox = Cinnamon.util_get_transformed_allocation(this.item);
+        const popupBox = this.applet.popupActor ?
+            Cinnamon.util_get_transformed_allocation(this.applet.popupActor) :
+            itemBox;
+        const gap = 6;
+
+        let tooltipLeft = itemBox.x1 + ((itemBox.x2 - itemBox.x1) / 2) - (tooltipWidth / 2);
+        let tooltipTop = popupBox.y1 - tooltipHeight - gap;
+
+        switch (this.applet.orientation) {
+            case St.Side.TOP:
+                tooltipTop = popupBox.y2 + gap;
+                break;
+            case St.Side.LEFT:
+                tooltipLeft = popupBox.x2 + gap;
+                tooltipTop = itemBox.y1 + ((itemBox.y2 - itemBox.y1) / 2) - (tooltipHeight / 2);
+                break;
+            case St.Side.RIGHT:
+                tooltipLeft = popupBox.x1 - tooltipWidth - gap;
+                tooltipTop = itemBox.y1 + ((itemBox.y2 - itemBox.y1) / 2) - (tooltipHeight / 2);
+                break;
+            case St.Side.BOTTOM:
+            default:
+                break;
+        }
+
+        if (tooltipTop < monitor.y) {
+            tooltipTop = popupBox.y2 + gap;
+        } else if (tooltipTop + tooltipHeight > monitor.y + monitor.height) {
+            tooltipTop = popupBox.y1 - tooltipHeight - gap;
+        }
+
+        if (tooltipLeft < monitor.x) {
+            tooltipLeft = monitor.x;
+        } else if (tooltipLeft + tooltipWidth > monitor.x + monitor.width) {
+            tooltipLeft = monitor.x + monitor.width - tooltipWidth;
+        }
+
+        tooltipTop = Math.max(monitor.y, Math.min(tooltipTop, monitor.y + monitor.height - tooltipHeight));
+
+        this._tooltip.set_position(Math.round(tooltipLeft), Math.round(tooltipTop));
+        this._tooltip.set_opacity(op);
+        this._tooltip.raise_top();
+        this.visible = true;
+    }
+};
+
 class FoldedXAppStatusIcon {
     constructor(applet, proxy) {
         this.applet = applet;
@@ -82,7 +156,7 @@ class FoldedXAppStatusIcon {
         this.actor.add_actor(this.icon_holder);
         this.actor.add_actor(this.label);
 
-        this._tooltip = new Tooltips.PanelItemTooltip(this, "", applet.orientation);
+        this._tooltip = new PopupIconTooltip(this.actor, applet, "");
         this._proxyPropChangeId = this.proxy.connect("g-properties-changed", Lang.bind(this, this.onPropertiesChanged));
 
         this.actor.connect("button-press-event", Lang.bind(this, this.onButtonPressEvent));
@@ -90,6 +164,8 @@ class FoldedXAppStatusIcon {
         this.actor.connect("scroll-event", Lang.bind(this, this.onScrollEvent));
         this.actor.connect("enter-event", Lang.bind(this, this.onEnterEvent));
 
+        this.iconSize = this.applet.getPanelIconSize(St.IconType.FULLCOLOR);
+        this.proxy.icon_size = this.iconSize;
         this.refresh();
     }
 
@@ -138,6 +214,8 @@ class FoldedXAppStatusIcon {
     setIconName(iconName) {
         if (!iconName) {
             this.iconName = null;
+            this.iconSize = this.applet.getPanelIconSize(St.IconType.FULLCOLOR);
+            this.proxy.icon_size = this.iconSize;
             this.icon_holder.hide();
             return;
         }
@@ -145,6 +223,7 @@ class FoldedXAppStatusIcon {
         let type = iconName.match(/symbolic/) ? St.IconType.SYMBOLIC : St.IconType.FULLCOLOR;
         let iconSize = this.applet.getPanelIconSize(type);
         this.iconName = iconName;
+        this.iconSize = iconSize;
         this.proxy.icon_size = iconSize;
 
         if (iconName.includes("/") && type !== St.IconType.SYMBOLIC) {
@@ -190,7 +269,7 @@ class FoldedXAppStatusIcon {
             this._tooltip.preventShow = true;
         }
 
-        this._tooltip.set_markup(tooltipText);
+        this._tooltip.set_text(tooltipText);
     }
 
     setVisible(visible) {
@@ -203,6 +282,10 @@ class FoldedXAppStatusIcon {
 
     onEnterEvent() {
         this._tooltip.preventShow = false;
+    }
+
+    hideTooltip() {
+        this._tooltip.hide();
     }
 
     getEventPositionInfo(actor) {
@@ -304,6 +387,7 @@ class TrayFoldApplet extends Applet.IconApplet {
         this._signals = new SignalManager.SignalManager(null);
         this._suppressContextMenuRebuild = false;
         this._contextMenuDirty = false;
+        this._xappSyncQueued = false;
 
         this.setAllowedLayout(Applet.AllowedLayout.BOTH);
         this.set_applet_icon_symbolic_name("xsi-go-up");
@@ -360,7 +444,7 @@ class TrayFoldApplet extends Applet.IconApplet {
         this._signals.connect(this._applet_context_menu, "open-state-changed", this._onContextMenuOpenStateChanged, this);
 
         this.reloadItem = new PopupMenu.PopupMenuItem(_("Reload tray icons"));
-        this.reloadItem.connect("activate", Lang.bind(this, this._redisplayTrayIcons));
+        this.reloadItem.connect("activate", Lang.bind(this, this._reloadTrayIcons));
         this._applet_context_menu.addMenuItem(this.reloadItem);
     }
 
@@ -470,6 +554,10 @@ class TrayFoldApplet extends Applet.IconApplet {
         }
 
         this.popupOpen = false;
+
+        for (let icon of this.xappIcons.values()) {
+            icon.hideTooltip();
+        }
 
         if (this.popupActor) {
             this.popupActor.hide();
@@ -670,6 +758,54 @@ class TrayFoldApplet extends Applet.IconApplet {
         this._applyHiddenRoles();
     }
 
+    _getPersistentKey(role) {
+        role = normalizeRole(role);
+
+        if (!role) {
+            return "";
+        }
+
+        if (!this.persistentKeyCache) {
+            this.persistentKeyCache = {};
+        }
+
+        if (this.persistentKeyCache[role]) {
+            return this.persistentKeyCache[role];
+        }
+
+        let pid = role.startsWith(":") ? this._getConnectionPid(role) : 0;
+        if (pid === 0) {
+            const match = role.match(/statusnotifieritem-(\d+)-\d+/i);
+            if (match) {
+                pid = parseInt(match[1], 10);
+            }
+        }
+
+        let key = "";
+        if (pid > 0) {
+            const desktopFile = this._getDesktopFileFromProcess(pid);
+            if (desktopFile) {
+                key = GLib.path_get_basename(desktopFile).replace(/\.desktop$/, "");
+            }
+            if (!key) {
+                key = this._getProcessName(pid);
+            }
+        }
+
+        if (!key) {
+            const appName = this._getDesktopAppDisplayName(role);
+            if (appName) {
+                key = this._normalizeAppKey(appName);
+            } else {
+                key = role;
+            }
+        }
+
+        key = normalizeRole(key);
+        this.persistentKeyCache[role] = key;
+        return key;
+    }
+
     _parseHiddenRoles() {
         try {
             const parsed = JSON.parse(this.hiddenRolesJson || "[]");
@@ -680,11 +816,42 @@ class TrayFoldApplet extends Applet.IconApplet {
             }
 
             this.hiddenRoles = [];
+            let shouldSave = false;
+
             for (let role of parsed) {
-                role = normalizeRole(role);
-                if (role && !this.hiddenRoles.includes(role)) {
-                    this.hiddenRoles.push(role);
+                const normalizedRole = normalizeRole(role);
+                const key = this._getPersistentKey(role);
+
+                if (!key || isTemporaryDbusRole(key)) {
+                    shouldSave = true;
+                    continue;
                 }
+
+                if (key !== normalizedRole) {
+                    shouldSave = true;
+                }
+
+                // Filter out stale dynamic roles
+                if (key.includes("statusnotifieritem-")) {
+                    const match = key.match(/statusnotifieritem-(\d+)-\d+/i);
+                    if (match) {
+                        const testPid = parseInt(match[1], 10);
+                        if (!GLib.file_test(`/proc/${testPid}`, GLib.FileTest.EXISTS)) {
+                            shouldSave = true;
+                            continue;
+                        }
+                    }
+                }
+
+                if (this.hiddenRoles.includes(key)) {
+                    shouldSave = true;
+                } else {
+                    this.hiddenRoles.push(key);
+                }
+            }
+
+            if (shouldSave) {
+                this._saveHiddenRoles();
             }
         } catch (e) {
             global.logError(`${UUID}: unable to parse hidden role list: ${e}`);
@@ -693,18 +860,36 @@ class TrayFoldApplet extends Applet.IconApplet {
     }
 
     _saveHiddenRoles() {
+        this.hiddenRoles = this.hiddenRoles.filter((key, index, keys) => {
+            return key && !isTemporaryDbusRole(key) && keys.indexOf(key) === index;
+        });
         this.hiddenRolesJson = JSON.stringify(this.hiddenRoles);
     }
 
+    _refreshTrayIconReplacementRoles() {
+        const activeRolesToHide = [];
+
+        for (let role of Object.keys(this.knownRoles)) {
+            const info = this.knownRoles[role];
+            if (info && info.active && this._isHiddenRole(role)) {
+                activeRolesToHide.push(role);
+            }
+        }
+
+        this._setTrayIconReplacementRoles(activeRolesToHide);
+    }
+
     _applyHiddenRoles(rebuildContextMenu = true) {
-        for (let role of this.hiddenRoles) {
-            this._markRole(role, _("Saved"), false);
+        for (let key of this.hiddenRoles) {
+            if (!this.knownRoles[key]) {
+                this._markRole(key, _("Saved"), false);
+            }
         }
 
         this._suppressContextMenuRebuild = !rebuildContextMenu;
 
         try {
-            this._setTrayIconReplacementRoles(this.hiddenRoles);
+            this._refreshTrayIconReplacementRoles();
         } finally {
             this._suppressContextMenuRebuild = false;
         }
@@ -759,21 +944,21 @@ class TrayFoldApplet extends Applet.IconApplet {
     }
 
     _isHiddenRole(role) {
-        return this.hiddenRoles.includes(normalizeRole(role));
+        return this.hiddenRoles.includes(this._getPersistentKey(role));
     }
 
     _toggleRole(role, rebuildContextMenu = true) {
-        role = normalizeRole(role);
+        const key = this._getPersistentKey(role);
 
-        if (!role) {
+        if (!key || isTemporaryDbusRole(key)) {
             return;
         }
 
-        const index = this.hiddenRoles.indexOf(role);
+        const index = this.hiddenRoles.indexOf(key);
         if (index >= 0) {
             this.hiddenRoles.splice(index, 1);
         } else {
-            this.hiddenRoles.push(role);
+            this.hiddenRoles.push(key);
         }
 
         this._saveHiddenRoles();
@@ -1055,7 +1240,13 @@ class TrayFoldApplet extends Applet.IconApplet {
             return appName;
         }
 
-        const pid = role.startsWith(":") ? this._getConnectionPid(role) : 0;
+        let pid = role.startsWith(":") ? this._getConnectionPid(role) : 0;
+        if (pid === 0) {
+            const match = role.match(/statusnotifieritem-(\d+)-\d+/i);
+            if (match) {
+                pid = parseInt(match[1], 10);
+            }
+        }
 
         if (pid > 0) {
             const desktopFile = this._getDesktopFileFromProcess(pid);
@@ -1071,7 +1262,7 @@ class TrayFoldApplet extends Applet.IconApplet {
 
             const processName = this._getProcessName(pid);
 
-            if (processName) {
+            if (processName && processName.toLowerCase() !== "xdg-dbus-proxy") {
                 this.displayNameCache[role] = processName;
                 return processName;
             }
@@ -1096,6 +1287,51 @@ class TrayFoldApplet extends Applet.IconApplet {
         this._rebuildContextMenu();
     }
 
+    _shouldShowRoleInContextMenu(role) {
+        const info = this.knownRoles[role];
+
+        return !!(info && (info.active || this._isHiddenRole(role)));
+    }
+
+    _rebuildContextMenuSoon() {
+        GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+            this._contextMenuDirty = false;
+            this._rebuildContextMenu();
+
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
+    _getGroupedRoles() {
+        const groups = {};
+
+        for (let role of Object.keys(this.knownRoles)) {
+            const info = this.knownRoles[role];
+            if (!info) continue;
+
+            const key = this._getPersistentKey(role);
+
+            if (!groups[key]) {
+                groups[key] = {
+                    key: key,
+                    displayName: info.displayName || key,
+                    active: false,
+                    roles: []
+                };
+            }
+
+            groups[key].roles.push(role);
+            if (info.active) {
+                groups[key].active = true;
+                if (info.displayName && info.displayName !== role) {
+                    groups[key].displayName = info.displayName;
+                }
+            }
+        }
+
+        return groups;
+    }
+
     _rebuildContextMenu() {
         if (!this.rolesMenuItem) {
             return;
@@ -1103,35 +1339,61 @@ class TrayFoldApplet extends Applet.IconApplet {
 
         this.rolesMenuItem.menu.removeAll();
 
-        for (let role of this.hiddenRoles) {
-            this._markRole(role, _("Saved"), this.knownRoles[role] ? this.knownRoles[role].active : false);
+        for (let key of this.hiddenRoles) {
+            if (!this.knownRoles[key]) {
+                this._markRole(key, _("Saved"), false);
+            }
         }
 
-        const roles = Object.keys(this.knownRoles).sort((a, b) => {
-            const aInfo = this.knownRoles[a];
-            const bInfo = this.knownRoles[b];
+        const groups = this._getGroupedRoles();
 
-            if (aInfo.active !== bInfo.active) {
-                return aInfo.active ? -1 : 1;
+        const groupKeys = Object.keys(groups).filter((key) => {
+            const group = groups[key];
+            const name = (group.displayName || key).trim().toLowerCase();
+            if (name.startsWith("org.kde.statusnotifieritem") ||
+                name.includes("statusnotifieritem") ||
+                name.startsWith(":") ||
+                name === "xdg-dbus-proxy") {
+                return false;
+            }
+            return group.active || this.hiddenRoles.includes(key);
+        }).sort((a, b) => {
+            const aGroup = groups[a];
+            const bGroup = groups[b];
+
+            if (aGroup.active !== bGroup.active) {
+                return aGroup.active ? -1 : 1;
             }
 
-            return GLib.utf8_collate(aInfo.displayName || a, bInfo.displayName || b);
+            return GLib.utf8_collate(aGroup.displayName || a, bGroup.displayName || b);
         });
 
-        if (roles.length === 0) {
+        if (groupKeys.length === 0) {
             const item = new PopupMenu.PopupMenuItem(_("No tray icons detected yet"));
             item.setSensitive(false);
             this.rolesMenuItem.menu.addMenuItem(item);
             return;
         }
 
-        for (let role of roles) {
-            const info = this.knownRoles[role];
-            const suffix = info.active ? "" : _(" (inactive)");
-            const item = new PopupMenu.PopupSwitchMenuItem((info.displayName || role) + suffix, this._isHiddenRole(role));
+        for (let key of groupKeys) {
+            const group = groups[key];
+            const suffix = group.active ? "" : _(" (inactive)");
+            const item = new PopupMenu.PopupSwitchMenuItem((group.displayName || key) + suffix, this.hiddenRoles.includes(key));
 
             item.connect("toggled", () => {
-                this._toggleRole(role, false);
+                const index = this.hiddenRoles.indexOf(key);
+                if (index >= 0) {
+                    this.hiddenRoles.splice(index, 1);
+                } else {
+                    this.hiddenRoles.push(key);
+                }
+
+                this._saveHiddenRoles();
+                this._applyHiddenRoles(false);
+
+                if (!group.active && !this.hiddenRoles.includes(key)) {
+                    this._rebuildContextMenuSoon();
+                }
             });
 
             this.rolesMenuItem.menu.addMenuItem(item);
@@ -1182,29 +1444,75 @@ class TrayFoldApplet extends Applet.IconApplet {
     }
 
     _getXAppRole(proxy) {
-        return normalizeRole(proxy.name || proxy.get_name());
+        return normalizeRole(proxy.name);
     }
 
     _getXAppDisplayName(proxy, role) {
         return this._getRoleDisplayName(role);
     }
 
+    _trackXAppProxy(proxy) {
+        this._signals.connect(proxy, "g-properties-changed", this._onXAppProxyPropertiesChanged, this);
+    }
+
+    _untrackXAppProxy(proxy) {
+        this._signals.disconnect("g-properties-changed", proxy, this._onXAppProxyPropertiesChanged);
+    }
+
+    _onXAppProxyPropertiesChanged(proxy, changedProps) {
+        const propNames = changedProps.deep_unpack();
+
+        if ("Name" in propNames) {
+            this._queueXAppSync();
+        }
+    }
+
+    _queueXAppSync() {
+        if (this._xappSyncQueued) {
+            return;
+        }
+
+        this._xappSyncQueued = true;
+
+        GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+            this._xappSyncQueued = false;
+            this._syncXAppIcons();
+            this._refreshTrayIconReplacementRoles();
+            this._maybeRebuildContextMenu();
+            this._updateAppletState();
+
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
     _onXAppIconAdded(monitor, proxy) {
+        this._trackXAppProxy(proxy);
+
         const role = this._getXAppRole(proxy);
-        this._markRole(role, "XApp", true, this._getXAppDisplayName(proxy, role));
+
+        if (role) {
+            this._markRole(role, "XApp", true, this._getXAppDisplayName(proxy, role));
+        }
 
         if (this._isHiddenRole(role)) {
             this._addXAppIcon(proxy);
         }
 
+        this._refreshTrayIconReplacementRoles();
         this._maybeRebuildContextMenu();
         this._updateAppletState();
     }
 
     _onXAppIconRemoved(monitor, proxy) {
         const role = this._getXAppRole(proxy);
-        this._markRole(role, "XApp", false);
+        this._untrackXAppProxy(proxy);
+
+        if (role) {
+            this._markRole(role, "XApp", false);
+        }
+
         this._removeXAppIcon(proxy);
+        this._refreshTrayIconReplacementRoles();
         this._maybeRebuildContextMenu();
         this._updateAppletState();
     }
@@ -1221,9 +1529,12 @@ class TrayFoldApplet extends Applet.IconApplet {
                 const key = this._getXAppKey(proxy);
                 const role = this._getXAppRole(proxy);
                 activeKeys.push(key);
-                this._markRole(role, "XApp", true, this._getXAppDisplayName(proxy, role));
 
-                if (this._isHiddenRole(role)) {
+                if (role) {
+                    this._markRole(role, "XApp", true, this._getXAppDisplayName(proxy, role));
+                }
+
+                if (role && this._isHiddenRole(role)) {
                     this._addXAppIcon(proxy);
                 } else {
                     this._removeXAppIcon(proxy);
@@ -1240,6 +1551,8 @@ class TrayFoldApplet extends Applet.IconApplet {
                 this.xappIcons.delete(key);
             }
         }
+
+        this._refreshTrayIconReplacementRoles();
     }
 
     _addXAppIcon(proxy) {
@@ -1296,17 +1609,25 @@ class TrayFoldApplet extends Applet.IconApplet {
             this._addLegacyIcon(icon, role);
         }
 
+        this._refreshTrayIconReplacementRoles();
         this._maybeRebuildContextMenu();
         this._updateAppletState();
     }
 
     _onLegacyIconRemoved(dispatcher, icon) {
+        let removed = false;
+
         for (let role in this.legacyIcons) {
             if (this.legacyIcons[role].icon === icon) {
                 this._markRole(role, "legacy", false);
                 this._removeLegacyIcon(role);
+                removed = true;
                 break;
             }
+        }
+
+        if (removed) {
+            this._refreshTrayIconReplacementRoles();
         }
 
         this._maybeRebuildContextMenu();
@@ -1406,6 +1727,14 @@ class TrayFoldApplet extends Applet.IconApplet {
         if (Main.statusIconDispatcher && Main.statusIconDispatcher.redisplay) {
             Main.statusIconDispatcher.redisplay();
         }
+    }
+
+    _reloadTrayIcons() {
+        this._syncXAppIcons();
+        this._refreshTrayIconReplacementRoles();
+        this._maybeRebuildContextMenu();
+        this._updateAppletState();
+        this._redisplayTrayIcons();
     }
 }
 
