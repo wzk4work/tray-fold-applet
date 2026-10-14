@@ -1,3 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// Copyright (C) 2026 Kelvin and contributors.
+// Includes adaptations of Cinnamon's XApp and legacy tray applets.
+// Modified in 2026 for tray folding, popup behavior, and lifecycle cleanup.
+// See NOTICE for upstream attribution and LICENSE for the license.
+
 const Applet = imports.ui.applet;
 const Clutter = imports.gi.Clutter;
 const Cinnamon = imports.gi.Cinnamon;
@@ -138,6 +144,8 @@ class FoldedXAppStatusIcon {
         this.proxy = proxy;
         this.name = proxy.name;
         this.iconName = null;
+        this.iconLoaderHandle = null;
+        this._destroyed = false;
 
         this.actor = new St.BoxLayout({
             style_class: "tray-fold-popup-icon",
@@ -209,9 +217,12 @@ class FoldedXAppStatusIcon {
             this.actor.vertical = false;
             this.actor.remove_style_class_name("vertical");
         }
+        this.setLabel(this.proxy.label);
     }
 
     setIconName(iconName) {
+        // Discard any pending file load when switching to a theme icon or hiding.
+        this.iconLoaderHandle = null;
         if (!iconName) {
             this.iconName = null;
             this.iconSize = this.applet.getPanelIconSize(St.IconType.FULLCOLOR);
@@ -246,10 +257,11 @@ class FoldedXAppStatusIcon {
     }
 
     onImageLoaded(cache, handle, actor) {
-        if (handle !== this.iconLoaderHandle) {
+        if (this._destroyed || handle !== this.iconLoaderHandle) {
             return;
         }
 
+        this.iconLoaderHandle = null;
         this.icon_holder.child = actor;
         this.applet._styleStatusIconActor(actor);
         this.icon_holder.show();
@@ -258,7 +270,7 @@ class FoldedXAppStatusIcon {
     setLabel(label) {
         this.label.set_text(label || "");
         this.label.visible = (this.applet.orientation === St.Side.TOP || this.applet.orientation === St.Side.BOTTOM) &&
-                             this.proxy.label.length > 0;
+                             !!label;
     }
 
     setTooltipText(tooltipText) {
@@ -358,6 +370,8 @@ class FoldedXAppStatusIcon {
     }
 
     destroy() {
+        this._destroyed = true;
+        this.iconLoaderHandle = null;
         if (this._proxyPropChangeId > 0) {
             this.proxy.disconnect(this._proxyPropChangeId);
             this._proxyPropChangeId = 0;
@@ -388,6 +402,10 @@ class TrayFoldApplet extends Applet.IconApplet {
         this._suppressContextMenuRebuild = false;
         this._contextMenuDirty = false;
         this._xappSyncQueued = false;
+        this._idleSources = new Set();
+        this._removed = false;
+        this._replacementRoles = [];
+        this._updatingReplacementRoles = false;
 
         this.setAllowedLayout(Applet.AllowedLayout.BOTH);
         this.set_applet_icon_symbolic_name("xsi-go-up");
@@ -453,14 +471,27 @@ class TrayFoldApplet extends Applet.IconApplet {
             return;
         }
 
-        GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+        this._queueIdle(() => {
             if (!this._contextMenuIsOpen() && this._contextMenuDirty) {
                 this._contextMenuDirty = false;
                 this._rebuildContextMenu();
             }
+        });
+    }
 
+    _queueIdle(callback) {
+        if (this._removed) {
+            return;
+        }
+
+        const sourceId = GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+            this._idleSources.delete(sourceId);
+            if (!this._removed) {
+                callback();
+            }
             return GLib.SOURCE_REMOVE;
         });
+        this._idleSources.add(sourceId);
     }
 
     on_applet_added_to_panel() {
@@ -468,9 +499,11 @@ class TrayFoldApplet extends Applet.IconApplet {
         this._signals.connect(this.monitor, "icon-added", this._onXAppIconAdded, this);
         this._signals.connect(this.monitor, "icon-removed", this._onXAppIconRemoved, this);
         this._signals.connect(Main.systrayManager, "changed", this._onSystrayRolesChanged, this);
-        this._signals.connect(Main.statusIconDispatcher, "status-icon-added", this._onLegacyIconAdded, this);
-        this._signals.connect(Main.statusIconDispatcher, "status-icon-removed", this._onLegacyIconRemoved, this);
-        this._signals.connect(Main.statusIconDispatcher, "before-redisplay", this._onBeforeLegacyRedisplay, this);
+        if (!Meta.is_wayland_compositor()) {
+            this._signals.connect(Main.statusIconDispatcher, "status-icon-added", this._onLegacyIconAdded, this);
+            this._signals.connect(Main.statusIconDispatcher, "status-icon-removed", this._onLegacyIconRemoved, this);
+            this._signals.connect(Main.statusIconDispatcher, "before-redisplay", this._onBeforeLegacyRedisplay, this);
+        }
         this._signals.connect(global.settings, "changed::panel-edit-mode", this._onPanelEditModeChanged, this);
         this._signals.connect(global, "scale-changed", this._refreshAllIcons, this);
         this._signals.connect(Main.themeManager, "theme-set", this._applyPopupThemeStyle, this);
@@ -482,12 +515,22 @@ class TrayFoldApplet extends Applet.IconApplet {
     }
 
     on_applet_removed_from_panel() {
+        if (this._removed) {
+            return;
+        }
+        this._removed = true;
+        for (let sourceId of this._idleSources) {
+            GLib.source_remove(sourceId);
+        }
+        this._idleSources.clear();
+        this._xappSyncQueued = false;
         this._signals.disconnectAllSignals();
         this._closePopup();
         this._setTrayIconReplacementRoles([]);
 
         this._clearXAppIcons();
         this._clearLegacyIcons();
+        this.monitor = null;
 
         if (this.popupActor) {
             Main.layoutManager.removeChrome(this.popupActor);
@@ -904,13 +947,8 @@ class TrayFoldApplet extends Applet.IconApplet {
     }
 
     _setTrayIconReplacementRoles(roles) {
-        if (!Main.systrayManager || !Main.systrayManager._roles) {
-            Main.systrayManager.unregisterTrayIconReplacement(UUID);
-
-            for (let role of roles) {
-                Main.systrayManager.registerTrayIconReplacement(role, UUID);
-            }
-
+        const manager = Main.systrayManager;
+        if (!manager || this._updatingReplacementRoles) {
             return;
         }
 
@@ -924,23 +962,24 @@ class TrayFoldApplet extends Applet.IconApplet {
             }
         }
 
-        const oldRoles = Main.systrayManager._roles
-            .filter((item) => item.uuid === UUID)
-            .map((item) => item.role)
-            .sort();
         const newRoles = normalizedRoles.slice().sort();
 
-        if (JSON.stringify(oldRoles) === JSON.stringify(newRoles)) {
+        if (JSON.stringify(this._replacementRoles) === JSON.stringify(newRoles)) {
             return;
         }
 
-        Main.systrayManager._roles = Main.systrayManager._roles.filter((item) => item.uuid !== UUID);
-
-        for (let role of normalizedRoles) {
-            Main.systrayManager._roles.push({ role, uuid: UUID });
+        // Public APIs emit changed synchronously for each operation. Avoid
+        // re-entering the sync while our replacements are only partly updated.
+        this._updatingReplacementRoles = true;
+        try {
+            manager.unregisterTrayIconReplacement(UUID);
+            for (let role of newRoles) {
+                manager.registerTrayIconReplacement(role, UUID);
+            }
+            this._replacementRoles = newRoles;
+        } finally {
+            this._updatingReplacementRoles = false;
         }
-
-        Main.systrayManager.emit("changed");
     }
 
     _isHiddenRole(role) {
@@ -1294,11 +1333,9 @@ class TrayFoldApplet extends Applet.IconApplet {
     }
 
     _rebuildContextMenuSoon() {
-        GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+        this._queueIdle(() => {
             this._contextMenuDirty = false;
             this._rebuildContextMenu();
-
-            return GLib.SOURCE_REMOVE;
         });
     }
 
@@ -1474,14 +1511,12 @@ class TrayFoldApplet extends Applet.IconApplet {
 
         this._xappSyncQueued = true;
 
-        GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+        this._queueIdle(() => {
             this._xappSyncQueued = false;
             this._syncXAppIcons();
             this._refreshTrayIconReplacementRoles();
             this._maybeRebuildContextMenu();
             this._updateAppletState();
-
-            return GLib.SOURCE_REMOVE;
         });
     }
 
@@ -1517,15 +1552,35 @@ class TrayFoldApplet extends Applet.IconApplet {
         this._updateAppletState();
     }
 
+    _deactivateXAppRoles() {
+        for (let role of Object.keys(this.knownRoles)) {
+            const info = this.knownRoles[role];
+
+            if (info && info.source === "XApp") {
+                info.active = false;
+            }
+        }
+    }
+
     _syncXAppIcons() {
         if (!this.monitor) {
             return;
         }
 
         let activeKeys = [];
+        let proxies = [];
 
         try {
-            for (let proxy of this.monitor.list_icons()) {
+            proxies = this.monitor.list_icons();
+        } catch (e) {
+            global.logError(`${UUID}: unable to list XApp status icons: ${e}`);
+            return;
+        }
+
+        this._deactivateXAppRoles();
+
+        try {
+            for (let proxy of proxies) {
                 const key = this._getXAppKey(proxy);
                 const role = this._getXAppRole(proxy);
                 activeKeys.push(key);
@@ -1591,6 +1646,9 @@ class TrayFoldApplet extends Applet.IconApplet {
     }
 
     _onSystrayRolesChanged() {
+        if (this._removed || this._updatingReplacementRoles) {
+            return;
+        }
         this._syncXAppIcons();
 
         this._maybeRebuildContextMenu();
@@ -1642,6 +1700,11 @@ class TrayFoldApplet extends Applet.IconApplet {
         const parent = icon.get_parent();
         if (parent) {
             parent.remove_actor(icon);
+            // The built-in systray expects every wrapper to contain an icon
+            // during redisplay. Remove the empty wrapper when taking ownership.
+            if (parent instanceof St.Bin) {
+                parent.destroy();
+            }
         }
 
         const box = new St.Bin({
@@ -1662,9 +1725,9 @@ class TrayFoldApplet extends Applet.IconApplet {
         icon.opacity = 255;
         icon.set_size(this.getPanelIconSize(St.IconType.FULLCOLOR) * global.ui_scale,
                       this.getPanelIconSize(St.IconType.FULLCOLOR) * global.ui_scale);
-        icon.connect("event", Lang.bind(this, this._onLegacyIconEvent));
+        const eventId = icon.connect("event", Lang.bind(this, this._onLegacyIconEvent));
 
-        this.legacyIcons[role] = { actor: box, icon };
+        this.legacyIcons[role] = { actor: box, icon, eventId };
         this.popupIconBox.insert_child_at_index(box, 0);
         this._updateAppletState();
     }
@@ -1675,8 +1738,20 @@ class TrayFoldApplet extends Applet.IconApplet {
         }
 
         const record = this.legacyIcons[role];
-        this.popupIconBox.remove_actor(record.actor);
-        record.actor.destroy();
+        if (!record.icon.is_finalized()) {
+            record.icon.disconnect(record.eventId);
+            if (record.icon.get_parent() === record.actor) {
+                record.actor.remove_actor(record.icon);
+            }
+        }
+        // Cinnamon's built-in systray also receives icon-removed and may have
+        // already destroyed this wrapper before our handler runs.
+        if (!record.actor.is_finalized()) {
+            if (record.actor.get_parent() === this.popupIconBox) {
+                this.popupIconBox.remove_actor(record.actor);
+            }
+            record.actor.destroy();
+        }
         delete this.legacyIcons[role];
     }
 
@@ -1724,7 +1799,7 @@ class TrayFoldApplet extends Applet.IconApplet {
     }
 
     _redisplayTrayIcons() {
-        if (Main.statusIconDispatcher && Main.statusIconDispatcher.redisplay) {
+        if (!Meta.is_wayland_compositor() && Main.statusIconDispatcher && Main.statusIconDispatcher.redisplay) {
             Main.statusIconDispatcher.redisplay();
         }
     }

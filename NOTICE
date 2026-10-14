@@ -1,0 +1,40 @@
+Tray Fold Cinnamon Applet
+SPDX-License-Identifier: GPL-2.0-or-later
+Copyright (C) 2026 Kelvin and contributors.
+
+This project is distributed under the GNU General Public License, version 2
+or (at your option) any later version. See LICENSE for the complete text.
+
+Cinnamon-derived code
+---------------------
+The XApp status icon rendering and event forwarding in FoldedXAppStatusIcon,
+and the legacy tray event handling in TrayFoldApplet, contain adaptations of
+Cinnamon's built-in xapp-status and systray applets. The folding UI, role
+selection, application-name resolution, and popup behavior are local changes.
+The adaptations and publication preparation were modified in 2026.
+
+Upstream project: Linux Mint Cinnamon
+https://github.com/linuxmint/cinnamon
+Reference sources (Cinnamon 6.6.9):
+https://github.com/linuxmint/cinnamon/blob/6.6.9/files/usr/share/cinnamon/applets/xapp-status%40cinnamon.org/applet.js
+https://github.com/linuxmint/cinnamon/blob/6.6.9/files/usr/share/cinnamon/applets/systray%40cinnamon.org/applet.js
+
+The upstream applet files contain no individual copyright headers. The
+following general copyright and license record is retained from Cinnamon
+6.6.9's debian/copyright, which covers these JavaScript files:
+https://github.com/linuxmint/cinnamon/blob/6.6.9/debian/copyright
+
+Copyright: 1989-1991, Free Software Foundation, Inc
+           2011, Giovanni Campagna
+           2008, Intel Corp
+           2013-2014, Jonas Kümmerlin <rgcjonas@gmail.com>
+           2009, Marcelo Jorge Vieira (metal) <metal@alucinados.com>
+           2008-2011, Red Hat, Inc
+           1999-2001, Eazel, Inc
+           2001, George Lebl
+           2000, Helix Code, Inc
+           2006-2008, OpenedHand Ltd
+           2007-2011, Red Hat, Inc
+           2002, Sun Microsystems Inc
+           1997-2000, The Free Software Foundation
+License: GPL-2+

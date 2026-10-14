@@ -3,5 +3,6 @@
     "name": "Tray Fold",
     "description": "Fold selected tray icons into a popup menu",
     "icon": "xsi-go-up",
-    "max-instances": 1
+    "max-instances": 1,
+    "version": "0.1.0"
 }

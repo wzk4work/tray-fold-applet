@@ -44,6 +44,10 @@ msgstr "尚未检测到托盘图标"
 msgid " (inactive)"
 msgstr "（未激活）"
 
+#: applet.js
+msgid "legacy"
+msgstr "旧式"
+
 #. tray-fold@kelvin->settings-schema.json->section-general->description
 msgid "General"
 msgstr "常规"
