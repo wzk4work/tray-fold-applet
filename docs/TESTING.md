@@ -12,7 +12,7 @@ Command: `./scripts/check.sh`
 - Eight Node.js regression tests using the real source with mocked Cinnamon/GI boundaries: public replacement APIs and reentrant signals, cancellation of deferred work, stale/renamed XApp roles and monitor failure, obsolete image loads and null labels, legacy actor detachment, already-destroyed wrappers, skipping the legacy dispatcher on Wayland, and click forwarding.
 - Python integration tests install into a temporary HOME with spaces in its path, update the installation, resolve real gettext translations, and uninstall twice. Other applets, other translation catalogs, and saved preferences remain intact. An invalid translation catalog must fail before changing an existing installation.
 
-All checks passed locally. The GitHub Actions workflow uses the same command; no hosted Actions run has been performed because this repository has not been pushed.
+All checks passed locally. The GitHub Actions workflow uses the same command on pushes and pull requests. Hosted results are available in the repository's [Actions tab](https://github.com/wzk4work/tray-fold-applet/actions).
 
 ## Real desktop smoke test
 
