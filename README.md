@@ -4,7 +4,11 @@
 
 Fold selected Cinnamon tray icons into a popup, similar to the hidden tray icon area on Windows. Version **0.1.0** is an early release.
 
-![Tray Fold popup with temporary demo icons](docs/tray-fold-demo.png)
+![Folded tray icons in the popup](docs/tray-fold-popup.png)
+
+![Panel with the popup closed](docs/tray-fold-panel.png)
+
+![Application selection in the context menu](docs/tray-fold-menu.png)
 
 ## Features
 

@@ -4,7 +4,11 @@
 
 将选定的托盘图标收进弹出区域，类似 Windows 的隐藏托盘图标功能。当前 **0.1.0** 为早期版本。
 
-![使用临时演示图标的真实弹出区域](docs/tray-fold-demo.png)
+![展开后的折叠托盘图标](docs/tray-fold-popup.png)
+
+![收起弹出区域后的面板](docs/tray-fold-panel.png)
+
+![右键菜单中的应用折叠开关](docs/tray-fold-menu.png)
 
 ## 环境与依赖
 
